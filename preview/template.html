@@ -287,8 +287,8 @@ body[data-shell="off"] .tree-children > .tree-node::before { background: transpa
   </section>
 
   <section class="scene">
-    <h2>E · better-sidebar 的子代理树 <code>ctx.betterSidebar.registerTab()</code></h2>
-    <p>装了 dsh-better-sidebar 时，用它的公开接口注册一个带小鱼的子代理页面；没装时这一段自动隐藏，不影响其他三处。</p>
+    <h2>E · 子代理树构想预览</h2>
+    <p>这里是视觉构想，不是宿主 DOM。插件在已有 Graph / Tree 节点插入鱼；实际挂载检查见 <a href="rows-check.html">rows-check.html</a>。</p>
     <div class="stage">
       <div class="panel tree">
         <div class="tree-node">
@@ -375,6 +375,7 @@ body[data-shell="off"] .tree-children > .tree-node::before { background: transpa
       pattern: identity.pattern,
       patternSeed: identity.patternSeed,
       strength: identity.strength,
+      still: el.dataset.state !== 'running',
     })
     el.dataset.rim = el.dataset.rim || 'off'
   }
@@ -425,21 +426,16 @@ body[data-shell="off"] .tree-children > .tree-node::before { background: transpa
     else document.body.removeAttribute('data-ds-dark-theme')
   })
 
-  const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
-  document.getElementById('rm-note').textContent = reduced ? '（系统当前开启了「减少动态效果」）' : ''
+  const motionQuery = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null
+  const updateMotionNote = () => {
+    document.getElementById('rm-note').textContent = motionQuery?.matches ? '（系统开启「减少动态效果」，游动开关也遵守此设置）' : ''
+  }
+  updateMotionNote()
+  motionQuery?.addEventListener?.('change', updateMotionNote)
   group('motion', (v) => {
     globalThis.fishPaused = v === 'off'
-    if (reduced) globalThis.__forceMotion = v === 'on'
     if (v === 'on') paintAll()
   })
-
-  // 预览专用：绕开系统的「减少动态效果」，好让鱼真的游起来看看
-  if (reduced) {
-    const original = window.matchMedia.bind(window)
-    window.matchMedia = (query) => (globalThis.__forceMotion && query.includes('prefers-reduced-motion')
-      ? { matches: false, media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }
-      : original(query))
-  }
 })();
 </script>
 </body>

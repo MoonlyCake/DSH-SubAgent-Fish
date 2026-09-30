@@ -21,6 +21,7 @@ const ROOT = resolve(HERE, '..')
 function asClassicScript(path) {
   return readFileSync(path, 'utf8')
     .replace(/^import\s[^\n]*\n/gm, '')
+    .replace(/^export\s*\{[^}]*\};?[ \t]*\n?/gm, '')
     .replace(/^export\s+/gm, '')
 }
 
