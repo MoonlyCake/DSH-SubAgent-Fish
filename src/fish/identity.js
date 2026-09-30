@@ -69,23 +69,28 @@ function baseToken(value) {
  * @returns the identity, plus the engine seed string and the body colour.
  */
 export function fishIdentity(id, overrides = {}) {
+  overrides = overrides && typeof overrides === 'object' ? overrides : {}
   const key = String(id ?? '')
   const r = stream(hash32(key))
   // One extra draw keeps the stream aligned when a caller overrides a field,
   // so forcing the pattern never reshuffles the fish's body.
-  const pick = (values, forced) => {
+  const pick = (values, forced, valid = (value) => values.includes(value)) => {
     const drawn = values[Math.floor(r() * values.length)]
-    return forced !== undefined && forced !== null ? forced : drawn
+    return forced !== undefined && forced !== null && valid(forced) ? forced : drawn
   }
   const identity = {
     id: key,
     species: pick(SPECIES_KEYS, overrides.species),
-    color: colorIndex(pick(FISH_COLORS.map((_, index) => index), overrides.color)),
+    color: colorIndex(pick(FISH_COLORS.map((_, index) => index), overrides.color, (value) => Number.isFinite(Number(value)))),
     eyes: pick(EYE_KEYS, overrides.eyes),
     pattern: pick(PATTERNS, overrides.pattern),
     base: baseToken(hash32(`${key}#body`)),
     patternSeed: baseToken(hash32(`${key}#pattern`)),
-    strength: overrides.strength ?? 0.34 + 0.34 * r(),
+    strength: 0.34 + 0.34 * r(),
+  }
+  const strength = Number(overrides.strength)
+  if (overrides.strength !== undefined && overrides.strength !== null && Number.isFinite(strength)) {
+    identity.strength = Math.max(0, Math.min(1, strength))
   }
   identity.seed = identitySeed(identity)
   identity.hex = FISH_COLORS[identity.color]

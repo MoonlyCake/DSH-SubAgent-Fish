@@ -1,8 +1,5 @@
-// GENERATED FILE — do not edit.
-// Produced by tools/sync-engine.mjs from the MaiWork production engine:
-//   /Volumes/Somemore/projects/MaiWork/plugin/CharTyr_MaiWork/maiwork/console/static/js/fish.js
-//   /Volumes/Somemore/projects/MaiWork/prototype/fish-patterns/markings.js
-// Run `node tools/sync-engine.mjs` to regenerate.
+// Maintained engine source, originally adapted from the MaiWork fish artwork.
+// Normal builds use this checked-in file; upstream sync is an explicit operation.
 
 // MaiWork 网页 · 程序生成的小鱼头像。
 // 同一个种子永远画出同一条鱼：一整块圆润纯色 + 一对白色眼睛，透明底、不带影子，默认像真鱼一样游（见文件末尾）。
@@ -196,7 +193,7 @@ function eyeTraits(seed, opts = {}) {
   const total = Object.values(EYES).reduce((n, e) => n + e.weight, 0);
   let x = E() * total, eyes = "slash";
   for (const [k, e] of Object.entries(EYES)) { if ((x -= e.weight) < 0) { eyes = k; break; } }
-  if (opts.eyes && EYES[opts.eyes]) eyes = opts.eyes;
+  if (Object.hasOwn(EYES, opts.eyes)) eyes = opts.eyes;
   return { eyes, E };
 }
 
@@ -208,31 +205,36 @@ export const FISH_BASE_RE = /^[A-Za-z0-9_]{0,10}$/;
 export function parseCustom(seed) {
   const s = String(seed == null ? "" : seed);
   const m = s.match(CUSTOM_RE);
-  if (!m || !SPECIES[m[2]] || !EYES[m[4]] || Number(m[3]) >= FISH_COLORS.length) return null;
+  if (!m || !Object.hasOwn(SPECIES, m[2]) || !Object.hasOwn(EYES, m[4]) || Number(m[3]) >= FISH_COLORS.length) return null;
   return { species: m[2], color: Number(m[3]), eyes: m[4], base: m[5], baseSeed: s.slice(0, m.index + m[1].length) + m[5] };
 }
 export const customSeed = ({ species, color, eyes, base = "" }) => `c-${species}-${Number(color) || 0}-${eyes}-${base}`;
 
 // 种子 → 鱼的特征（种类、颜色等），不画图。opts.species / opts.eyes 可以指定（预览用）。
 export function fishTraits(seed, opts = {}) {
+  opts = opts && typeof opts === "object" ? opts : {};
   const c = parseCustom(seed);
   const base = c ? c.baseSeed : seed;
   const R = rng(base);
   const keys = Object.keys(SPECIES);
   let species;
   if (c) { R(); species = c.species; }   // 照样抽一次，和没定制时同一串随机数，原样保存不变样
-  else species = opts.species && SPECIES[opts.species] ? opts.species : keys[Math.floor(R() * keys.length)];
-  if (c && opts.species && SPECIES[opts.species]) species = opts.species;
+  else {
+    const drawn = keys[Math.floor(R() * keys.length)];
+    species = Object.hasOwn(SPECIES, opts.species) ? opts.species : drawn;
+  }
+  if (c && Object.hasOwn(SPECIES, opts.species)) species = opts.species;
   let color = FISH_COLORS[Math.floor(R() * FISH_COLORS.length)];
   if (c) color = FISH_COLORS[c.color];
-  const { eyes } = eyeTraits(base, c && !opts.eyes ? { ...opts, eyes: c.eyes } : opts);
+  const { eyes } = eyeTraits(base, c && !Object.hasOwn(EYES, opts.eyes) ? { ...opts, eyes: c.eyes } : opts);
   return { species, name: SPECIES[species].name, color, eyes, eyeName: EYES[eyes].name, R, base, custom: !!c };
 }
 
 export function fishSvg(seed, opts = {}) {
+  opts = opts && typeof opts === "object" ? opts : {};
   const { species, color, R, base, custom } = fishTraits(seed, opts);
   const c = custom ? parseCustom(seed) : null;
-  const eyeOpts = c && !opts.eyes ? { ...opts, eyes: c.eyes } : opts;
+  const eyeOpts = c && !Object.hasOwn(EYES, opts.eyes) ? { ...opts, eyes: c.eyes } : opts;
   const u = (lo, hi) => lo + (hi - lo) * R();
   const ok = (p) => R() < p;
   const spec = SPECIES[species].make(u, ok);
@@ -272,7 +274,8 @@ export function fishSvg(seed, opts = {}) {
   const e2 = [ex - gap * cr, ey - gap * sr];
   const eyesSvg = place(ex, ey, drawn[0]) + place(e2[0], e2[1], drawn[1]);
 
-  const size = opts.size || 64;
+  const numericSize = Number(opts.size);
+  const size = Number.isFinite(numericSize) && numericSize > 0 ? numericSize : 64;
   let lureSvg = "";
   if (lure) {
     const r0 = T(lure.root), r1 = T(lure.tip);
@@ -286,9 +289,10 @@ export function fishSvg(seed, opts = {}) {
   const along = (p) => p[0] * ax[0] + p[1] * ax[1];
   const ss = pts.map(along), sHead = Math.max(...ss), sTail = Math.min(...ss), span = sHead - sTail || 1;
   const M = rng(`${base}#swim`);   // 节奏另用一串随机数，不影响鱼身；每条鱼快慢、起步不同
+  const numericStrength = Number(opts.strength ?? .55);
   const geom = {
     markings: makeMarkings(opts.pattern || 'none', `${base}#${opts.patternSeed ?? ''}`, {pts, ax, n: nrm}),
-    strength: Math.max(0, Math.min(1, Number(opts.strength ?? .55))),
+    strength: Number.isFinite(numericStrength) ? Math.max(0, Math.min(1, numericStrength)) : .55,
     pts, ts: ss.map((s) => (sHead - s) / span), n: nrm, eyeT: (sHead - along([ex, ey])) / span,
     sHead, span, ax,
     style: SWIM[species] || SWIM.classic, cx: 50, cy: 50,
@@ -369,13 +373,44 @@ export const swimGeom = (id) => SWIM_GEOMS.get(Number(id));
 
 // 全页一个动画循环：每 0.4 秒（或页面重画后）重新找一遍页面上会游的鱼；连续一阵子找不到就停，下次画鱼再启动。
 // 系统开了「减少动态效果」就不动；标签页在后台时浏览器自己会暂停。
-let swimOn = false;
+let swimOn = false, swimFrame = null, swimEpoch = 0, swimMotionQuery = null;
+
+function haltSwimFrames() {
+  swimOn = false;
+  swimEpoch += 1;
+  if (swimFrame !== null && typeof cancelAnimationFrame === "function") cancelAnimationFrame(swimFrame);
+  swimFrame = null;
+}
+
+function motionChanged() {
+  if (swimMotionQuery?.matches) haltSwimFrames();
+  else startSwimLoop();
+}
+
+/** Cancel animation and release listeners when the plugin is unloaded. */
+export function stopSwimLoop() {
+  haltSwimFrames();
+  if (swimMotionQuery) {
+    if (typeof swimMotionQuery.removeEventListener === "function") swimMotionQuery.removeEventListener("change", motionChanged);
+    else if (typeof swimMotionQuery.removeListener === "function") swimMotionQuery.removeListener(motionChanged);
+    swimMotionQuery = null;
+  }
+}
+
 function startSwimLoop() {
   if (swimOn || typeof requestAnimationFrame !== "function" || typeof document === "undefined" || typeof document.querySelectorAll !== "function") return;
-  if (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  if (!swimMotionQuery && typeof matchMedia === "function") {
+    swimMotionQuery = matchMedia("(prefers-reduced-motion: reduce)");
+    if (typeof swimMotionQuery.addEventListener === "function") swimMotionQuery.addEventListener("change", motionChanged);
+    else if (typeof swimMotionQuery.addListener === "function") swimMotionQuery.addListener(motionChanged);
+  }
+  if (swimMotionQuery?.matches) return;
   swimOn = true;
+  const epoch = ++swimEpoch;
   let items = [], lastScan = -1e9, empty = 0;
   const tick = (now) => {
+    if (!swimOn || epoch !== swimEpoch) return;
+    swimFrame = null;
     // 页面重画后旧的鱼会被换掉：发现有鱼离开页面就立刻重找，不等 0.4 秒
     if (now - lastScan > 400 || items.some((x) => !x.body.isConnected)) {
       lastScan = now;
@@ -385,10 +420,11 @@ function startSwimLoop() {
         clip: el.querySelector(".fish-clip"), marks: [...el.querySelectorAll(".fish-mark")],
       })).filter((x) => x.g && x.body);
       empty = items.length ? 0 : empty + 1;
-      if (empty > 5) { swimOn = false; return; }
+      if (empty > 5) { stopSwimLoop(); return; }
     }
-    if (globalThis.fishPaused || (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches)) {
-      requestAnimationFrame(tick); return;
+    if (swimMotionQuery?.matches) { haltSwimFrames(); return; }
+    if (globalThis.fishPaused) {
+      swimFrame = requestAnimationFrame(tick); return;
     }
     const sec = now / 1000;
     for (const x of items) {
@@ -399,9 +435,9 @@ function startSwimLoop() {
       x.bob && x.bob.setAttribute("transform", p.body);
       for (const h of x.heads) h.setAttribute("transform", p.head);
     }
-    requestAnimationFrame(tick);
+    swimFrame = requestAnimationFrame(tick);
   };
-  requestAnimationFrame(tick);
+  swimFrame = requestAnimationFrame(tick);
 }
 
 export { startSwimLoop };
