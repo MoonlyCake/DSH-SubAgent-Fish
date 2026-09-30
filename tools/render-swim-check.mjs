@@ -5,7 +5,7 @@
  * `tools/render-preview.mjs` captures the bundle's markup as a still image, so
  * it can never answer "does it move?". This page does: it loads the real
  * `lib/client.js` as the DSH client loader would, calls `apply()` against a fake
- * client context, renders the two registered components into the DOM, and then
+ * client context, renders the registered tab titles into the DOM, and then
  * simply gets out of the way — the fish engine's own requestAnimationFrame loop
  * takes over, exactly as it does inside DSH.
  *
@@ -47,8 +47,6 @@ ${css}
 <body><div class="wrap">
   <h2>D · 右侧栏子代理标签（插件真实输出，由引擎自身的循环驱动）</h2>
   <div class="strip" id="tabs"></div>
-  <h2>E · better-sidebar 子代理页</h2>
-  <div class="card" id="page"></div>
 </div>
 
 <script>
@@ -134,18 +132,13 @@ var list = {
 };
 
 var slots = {};
-var betterTab = null;
 captured.exports.apply({
   effect: function (fn) { fn() },
   slots: {
     inject: function (key, callback) { slots[key] = callback().component; return function () {} },
     register: function (spec, component) { return { spec: spec, component: component } },
   },
-  inject: function (services, callback) {
-    if (services.indexOf('betterSidebar') === -1) return;
-    callback({ effect: function (fn) { fn() },
-      betterSidebar: { registerTab: function (descriptor) { betterTab = descriptor; return function () {} } } });
-  },
+  inject: function () {},
 });
 
 var Title = slots['sidebar.right.pane.tab.title'];
@@ -163,11 +156,6 @@ tabs.forEach(function (tab) {
   })));
   strip.appendChild(pill);
 });
-
-document.getElementById('page').appendChild(toDom(betterTab.component({
-  ctx: { sessions: { list: { getSnapshot: function () { return list }, subscribe: function () { return function () {} } } } },
-  scope: { sessionId: 'c-docs-1' },
-})));
 
 /* 让页面自己报告：引擎认出了几条会游的鱼，鱼身路径有没有随时间变化。
    写进 DOM 是为了能用 --dump-dom 读出来，不靠猜。 */

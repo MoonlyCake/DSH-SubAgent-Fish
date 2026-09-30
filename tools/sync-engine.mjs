@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /**
- * Regenerate `src/fish/engine.js` from the MaiWork production fish engine.
+ * Import a MaiWork production engine into a review draft.
+ * The checked-in src/fish/engine.js includes local fixes and is authoritative
+ * for normal builds; this importer must never overwrite it automatically.
  *
  * The fish artwork is NOT re-implemented here. This tool reads the single
  * authoritative source —
@@ -19,10 +21,10 @@
  * asserts on its anchor: if upstream moves, this tool fails loudly instead of
  * emitting a subtly wrong engine.
  *
- * Usage:  node tools/sync-engine.mjs [--check]
- *         --check  fail (exit 1) when src/fish/engine.js is out of date.
+ * Usage: MAIWORK_ROOT=/path/to/MaiWork node tools/sync-engine.mjs --output work/engine-import.js
+ *        --check compares that explicit draft with upstream without writing.
  */
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -30,10 +32,20 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
 
 /** The MaiWork checkout holding the production engine and pattern module. */
-const MAIWORK = process.env.MAIWORK_ROOT ?? '/Volumes/Somemore/projects/MaiWork'
+const outputIndex = process.argv.indexOf('--output')
+const outputPath = outputIndex >= 0 ? process.argv[outputIndex + 1] : undefined
+if (!process.env.MAIWORK_ROOT || !outputPath || outputPath.startsWith('--')) {
+  console.error('Usage: MAIWORK_ROOT=/path/to/MaiWork node tools/sync-engine.mjs --output work/engine-import.js [--check]')
+  process.exit(1)
+}
+const MAIWORK = resolve(process.env.MAIWORK_ROOT)
 const PROD_FISH = join(MAIWORK, 'plugin/CharTyr_MaiWork/maiwork/console/static/js/fish.js')
 const MARKINGS = join(MAIWORK, 'prototype/fish-patterns/markings.js')
-const OUT = join(ROOT, 'src/fish/engine.js')
+const OUT = resolve(outputPath)
+if (OUT === join(ROOT, 'src/fish/engine.js')) {
+  console.error('Import to a separate draft and review the changes before updating src/fish/engine.js.')
+  process.exit(1)
+}
 
 function readRequired(path) {
   if (!existsSync(path)) {
@@ -131,11 +143,11 @@ function build() {
   source += '\n' + readRequired(MARKINGS)
 
   const banner =
-    '// GENERATED FILE — do not edit.\n' +
+    '// UPSTREAM IMPORT DRAFT — review local fixes before adopting.\n' +
     '// Produced by tools/sync-engine.mjs from the MaiWork production engine:\n' +
     `//   ${PROD_FISH}\n` +
     `//   ${MARKINGS}\n` +
-    '// Run `node tools/sync-engine.mjs` to regenerate.\n\n'
+    '// Not used by the normal plugin build.\n\n'
 
   return banner + source
 }
@@ -145,11 +157,12 @@ const generated = build()
 if (process.argv.includes('--check')) {
   const current = existsSync(OUT) ? readFileSync(OUT, 'utf8') : ''
   if (current !== generated) {
-    console.error('src/fish/engine.js is out of date — run: node tools/sync-engine.mjs')
+    console.error(`${OUT} differs from the upstream import`)
     process.exit(1)
   }
-  console.log('src/fish/engine.js is up to date')
+  console.log(`${OUT} matches the upstream import`)
 } else {
+  mkdirSync(dirname(OUT), { recursive: true })
   writeFileSync(OUT, generated)
   console.log(`wrote src/fish/engine.js (${generated.length} bytes)`)
 }

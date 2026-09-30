@@ -1,5 +1,6 @@
 /**
- * Minimal PNG reader: 8-bit, non-interlaced, colour type 6 (RGBA) or 2 (RGB).
+ * Minimal PNG reader: 8-bit, non-interlaced, colour type 6 (RGBA) or 2 (RGB),
+ * including an RGB transparent colour key (tRNS).
  *
  * Chrome's `--screenshot` is the only rasteriser this project has, and Node has
  * no built-in PNG decoder, so the logo tool needs this to get at the pixels of
@@ -22,6 +23,7 @@ export function decodePng(bytes) {
   }
   let offset = 8
   let header
+  let transparentRgb
   const idat = []
   while (offset < bytes.length) {
     const length = readUint32(bytes, offset)
@@ -35,6 +37,11 @@ export function decodePng(bytes) {
         colorType: data[9],
         interlace: data[12],
       }
+    } else if (type === 'tRNS') {
+      if (header?.colorType !== 2 || data.length !== 6) throw new Error('unsupported PNG transparency')
+      // Even for an 8-bit image, the PNG tRNS chunk stores three 16-bit
+      // sample values. A matching pixel is transparent; all others are opaque.
+      transparentRgb = [0, 2, 4].map((at) => (data[at] << 8) | data[at + 1])
     } else if (type === 'IDAT') {
       idat.push(data)
     } else if (type === 'IEND') {
@@ -83,7 +90,10 @@ export function decodePng(bytes) {
     rgba[o] = lines[i * 3]
     rgba[o + 1] = lines[i * 3 + 1]
     rgba[o + 2] = lines[i * 3 + 2]
-    rgba[o + 3] = 255
+    rgba[o + 3] = transparentRgb !== undefined
+      && rgba[o] === transparentRgb[0]
+      && rgba[o + 1] === transparentRgb[1]
+      && rgba[o + 2] === transparentRgb[2] ? 0 : 255
   }
   return { width, height, rgba }
 }

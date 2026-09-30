@@ -69,7 +69,7 @@ const documentStub = {
   // The decorator scans for rows; there are none in a headless run, so it must
   // find zero and quietly stop.
   querySelectorAll: () => [],
-  createElement: () => ({ dataset: {}, textContent: '', isConnected: true, setAttribute() {}, insertBefore() {} }),
+  createElement: () => ({ dataset: {}, textContent: '', isConnected: true, setAttribute() {}, insertBefore() {}, remove() {} }),
   head: { appendChild: (tag) => styleTags.push(tag) },
 }
 
@@ -212,8 +212,8 @@ equal('a non-subagent tab is left untouched', foreignTab, '某个别的标签')
 console.log('\nE · subagent row decorator')
 check('the row decorator is in the shipped bundle', bundleSource.includes('installSidebarRowFish'))
 check('it anchors on ARIA, not on hashed class names', bundleSource.includes('[role="treeitem"][aria-level]'))
-check('it still requires the subagent-only label element', bundleSource.includes('_subagentLabel'))
-check('it gives up instead of scanning forever', bundleSource.includes('MAX_EMPTY_SCANS'))
+check('it supports current Tree titles', bundleSource.includes('treeTitle'))
+check('it supports Graph nodes', bundleSource.includes('[data-graph-node][role="button"]'))
 check('it cleans up after itself on unload', bundleSource.includes('disposed = true'))
 check('animation follows the run state, not the artwork', bundleSource.includes('function shouldFishSwim'))
 check('idle fish are emitted without swim hooks', bundleSource.includes('still: !animated'))
@@ -229,7 +229,8 @@ const markupFor = (childId, running = true) => render(Title({
 })).props.children[0].props.dangerouslySetInnerHTML.__html
 
 const first = markupFor('child-a')
-check('same subagent always renders byte-identical fish', first === markupFor('child-a'))
+const withoutClipIds = (markup) => markup.replace(/pattern-clip-(?:avatar-)?\d+/g, 'pattern-clip-N')
+check('same subagent always renders the same fish artwork', withoutClipIds(first) === withoutClipIds(markupFor('child-a')))
 check('different subagents render different fish', first !== markupFor('child-b'))
 // Contrast bail-out: only fish that genuinely fall below 3:1 against a panel
 // colour get a halo — the decision must follow measurement, not a guess.
@@ -281,7 +282,7 @@ check('a finished subagent\'s fish carries none, so it stays still',
 const withoutMotion = (markup) => markup
   .replace(/ fish-swim/g, '')
   .replace(/ data-fish-id="\d+"/g, '')
-  .replace(/pattern-clip-\d+/g, 'pattern-clip-N')
+  .replace(/pattern-clip-(?:avatar-)?\d+/g, 'pattern-clip-N')
 check('both states draw the same fish, only the motion differs',
   withoutMotion(markupFor('child-a', true)) === withoutMotion(markupFor('child-a', false)))
 check('a patterned fish carries its clipped markings', first.includes('fish-clip') || first.includes('fish-mark') === false)

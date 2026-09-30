@@ -5,12 +5,12 @@
  *
  * This is not the mock preview (`preview/index.html`) — that one hand-draws what
  * the surfaces look like. This tool evaluates `lib/client.js` exactly as the DSH
- * client loader would, captures the stylesheet `apply()` injects and the two
- * components it registers, renders them against a realistic session list, and
+ * client loader would, captures the stylesheet `apply()` injects and the tab
+ * title it registers, renders it against realistic session statuses, and
  * serialises the resulting element tree to HTML.
  *
- * What it proves: the component tree, the CSS (sizes, spacing, states, tree
- * indentation) and the real fish SVG, as shipped.
+ * What it proves: the title component, its CSS and the real fish SVG, as shipped.
+ * The sidebar DOM decorator is covered by tools/render-rows-check.mjs.
  * What it does NOT prove: that DSH mounts the plugin and dispatches the slots —
  * only a DSH restart can show that. The fish here are static: the swim loop
  * lives in the engine and is exercised by `preview/index.html`.
@@ -43,7 +43,7 @@ const sandbox = {
   console,
   document: {
     querySelector: () => null,
-    createElement: () => ({ dataset: {}, textContent: '', isConnected: true }),
+    createElement: () => ({ dataset: {}, textContent: '', isConnected: true, remove() {} }),
     head: { appendChild: (tag) => styleTags.push(tag) },
   },
   Math, Date, JSON, Object, Array, Number, String, Symbol, Set, Map, Error,
@@ -65,20 +65,13 @@ runInContext(readFileSync(join(ROOT, 'lib/client.js'), 'utf8'), createContext(sa
 
 // --- apply() against a fake client context, capturing what it contributes -----
 const slots = new Map()
-let betterTab = null
 entry.exports.apply({
   effect: (fn) => { fn() },
   slots: {
     inject: (key, callback) => { slots.set(key, callback().component); return () => {} },
     register: (spec, component) => ({ spec, component }),
   },
-  inject: (services, callback) => {
-    if (!services.includes('betterSidebar')) return
-    callback({
-      effect: (fn) => { fn() },
-      betterSidebar: { registerTab: (descriptor) => { betterTab = descriptor; return () => {} } },
-    })
-  },
+  inject: () => {},
 })
 
 const css = styleTags[0]?.textContent ?? ''
@@ -159,11 +152,6 @@ const tabStrip = [
   useSessionStatus: (selector) => selector(new Map([[child, { running }]])),
 })))
 
-const page = render(betterTab.component({
-  ctx: { sessions: { list: { getSnapshot: () => list, subscribe: () => () => {} } } },
-  scope: { sessionId: 'c-docs-1' },
-}))
-
 const html = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>插件真实输出 · dsh-subagent-fish</title>
 <style>
@@ -186,8 +174,7 @@ ${css}
   <span class="tab-pill">${toHtml(tabStrip[2])}</span>
 </div></div>
 
-<h2>E · better-sidebar 子代理页 —— 插件的真实输出 <code>ctx.betterSidebar.registerTab()</code></h2>
-<div class="stage" style="max-width:420px">${toHtml(page)}</div>
+<p style="color:#9a9aa3;font-size:13px">Graph / Tree 行挂载验收：<a style="color:inherit" href="rows-check.html">打开宿主结构检查页</a></p>
 </body></html>
 `
 

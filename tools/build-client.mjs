@@ -15,7 +15,8 @@
  *
  * Usage:  node tools/build-client.mjs
  */
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { Script } from 'node:vm'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -66,6 +67,10 @@ ${body}
 });
 `
 
+// Validate the generated classic script before replacing the shipped artifact.
+// Concatenation can introduce name collisions even if every source parses alone.
+new Script(bundle, { filename: 'lib/client.js' })
+mkdirSync(join(ROOT, 'lib'), { recursive: true })
 writeFileSync(join(ROOT, 'lib/client.js'), bundle)
 console.log(`wrote lib/client.js (${bundle.length} bytes)`)
 
