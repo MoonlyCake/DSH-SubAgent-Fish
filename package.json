@@ -1,8 +1,8 @@
 {
   "name": "dsh-subagent-fish",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
-  "description": "给 DSH 的子代理一条会游动的小鱼：右侧栏的子代理标签，以及 dsh-better-sidebar 里的子代理树页面。",
+  "description": "给 DeepSeek Harness 桌面版的子代理一条会游动的小鱼。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -39,8 +39,8 @@
     "react": "^18.2.0"
   },
   "scripts": {
-    "build": "node tools/sync-engine.mjs && node tools/build-client.mjs",
-    "test": "node tools/test-client.mjs",
+    "build": "node tools/build-client.mjs",
+    "test": "node tools/test-client.mjs && node tools/test-sidebar-rows.mjs && node tools/test-fish.mjs && node tools/test-images.mjs && node tools/test-tab-title.mjs && node tools/test-verify-live.mjs",
     "preview": "node preview/build.mjs"
   },
   "license": "PolyForm-Noncommercial-1.0.0"

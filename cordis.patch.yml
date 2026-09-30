@@ -5,10 +5,8 @@
 # below is merged at boot — one row mounts BOTH halves: the (empty) node half
 # and the browser half discovered through package.json's `dsh.client`.
 #
-# Mount it AFTER dsh-better-sidebar: this plugin's sidebar page registers
-# itself through that package's public `betterSidebar` service, so the service
-# must exist first. (If it does not, the page simply never registers and the
-# right-sidebar tab fish keep working.)
+# The browser half waits for the optional betterSidebar service before
+# decorating its existing Graph / Tree nodes. Without it, tab fish still work.
 - insert:
     - id: subagent-fish
       name: 'dsh-subagent-fish'
