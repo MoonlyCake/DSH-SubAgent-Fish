@@ -1,157 +1,172 @@
 // ---------------------------------------------------------------------------
-// E · 把小鱼挂到 dsh-better-sidebar「任务管理」页已有的子代理行上
+// E · 在 dsh-better-sidebar 的任务树 / 工作流图里给子代理挂上小鱼。
 //
-// 为什么是这种方式，而不是像原来那样注册一个新标签页：
-//
-//   - 那个页面是 better-sidebar 内置的 `subagent` 标签（中文名「任务管理」），
-//     渲染的是它自己的 SubagentView，**每一行没有留任何扩展口**；
-//   - 想用同 id 顶掉它也不行 —— 它的 registerTab 遇到重复 id 会直接抛错
-//     （"tab type already registered"），内置标签走的是同一个注册表。
-//
-// 所以只剩一条路：等它把行渲染出来，再把鱼插进去。这是全插件唯一一处依赖
-// 别人 DOM 的地方，因此写得尽量防守：
-//
-//   - 锚点用 role="treeitem" + aria-level 这组 ARIA 语义，而不是 CSS 类名；
-//   - 必须同时找得到子代理行专有的标签元素才动手，所以不会误伤文件树等
-//     别的 treeitem；
-//   - 从行里的文字反查子代理 id，查不到就**什么都不做**，绝不猜；
-//   - better-sidebar 升级把这套结构改掉时，最坏的结果是鱼不出现，
-//     不会把它的页面弄坏。
-//
+// TasksTree 没有行级 id，按其 treeTitle（旧版 subagentLabel）与 catalog 的
+// 同一命名规则反查；重名时不猜。TasksGraph 已有 data-graph-node，直接用 id，
+// 并要求子代理 / 队友种类标记和 catalog 身份，避免触碰主代理、工作流、折叠组。
 // 本文件由 tools/build-client.mjs 拼进 lib/client.js，共用同一个作用域。
 // ---------------------------------------------------------------------------
 
-/** 子代理行的锚点：ARIA 树节点。 */
 const SUBAGENT_ROW_SELECTOR = '[role="treeitem"][aria-level]'
-/** 子代理行独有的标签元素（类名带内容哈希前缀，所以只匹配后缀）。 */
-const SUBAGENT_LABEL_SELECTOR = '[class*="_subagentLabel"]'
-/** 处理过的行打上这个标记，重复扫描不会插第二条。 */
+const SUBAGENT_GRAPH_SELECTOR = '[data-graph-node][role="button"]'
+const SIDEBAR_FISH_SELECTOR = `${SUBAGENT_ROW_SELECTOR}, ${SUBAGENT_GRAPH_SELECTOR}`
+const SUBAGENT_LABEL_SELECTOR = '[class*="treeTitle"][title], [class*="_subagentLabel"]'
+// 保留旧标记名，方便已有预览和诊断读取；卸载时只清理自己拥有的节点。
 const ROW_MARK = 'dsfFishId'
-/** 连续多少次扫描一个子代理行都没找到，就彻底放弃（避免永远空转）。 */
-const MAX_EMPTY_SCANS = 40
 
-/**
- * 从会话列表里建「行文字 → 子代理 id」的索引。
- *
- * 命名规则与 better-sidebar 自己完全一致（entry.label → displayTitle → id），
- * 否则行里显示的名字和这里算出来的对不上，鱼就挂不上去。
- *
- * @param list - ctx.sessions.list 的快照。
- * @returns label → sessionId。
- */
-function subagentIdsByLabel(list) {
+/** 使用与 better-sidebar childLabel 相同的 entry.label → displayTitle → id 规则。 */
+function subagentRowsIndex(list) {
   const byLabel = new Map()
+  const ids = new Set()
   const projections = list?.projectionsBySession
-  if (projections === null || typeof projections !== 'object') return byLabel
+  if (projections === null || typeof projections !== 'object') return { byLabel, ids }
   for (const projection of Object.values(projections)) {
     const entries = projection?.values?.subagentCatalog
     if (!Array.isArray(entries)) continue
     for (const entry of entries) {
-      if (entry === null || typeof entry !== 'object' || typeof entry.id !== 'string') continue
-      const summary = list.byId?.[entry.id]
-      const label = entry.label ?? summary?.displayTitle ?? entry.id
-      if (typeof label === 'string' && label.length > 0 && !byLabel.has(label)) {
-        byLabel.set(label, entry.id)
-      }
+      if (entry === null || typeof entry !== 'object' || typeof entry.id !== 'string' || entry.id.length === 0) continue
+      ids.add(entry.id)
+      const label = entry.label ?? list.byId?.[entry.id]?.displayTitle ?? entry.id
+      if (typeof label !== 'string' || label.trim().length === 0) continue
+      const key = label.trim()
+      // 同一个 id 在多个投影里出现不算重名；不同 id 重名则不能安全地反查。
+      if (!byLabel.has(key)) byLabel.set(key, entry.id)
+      else if (byLabel.get(key) !== entry.id) byLabel.set(key, null)
     }
   }
-  return byLabel
+  return { byLabel, ids }
 }
 
-/** 一条行对应的鱼该是什么状态。 */
 function rowFishState(list, sessionId) {
   return list?.byId?.[sessionId]?.running === true ? 'running' : 'done'
 }
 
-/**
- * 装好这套「往行上挂鱼」的观察器。
- *
- * @param ctx - 客户端 cordis 上下文（只需要 ctx.sessions）。
- * @returns 卸载函数：断开观察、并把自己插进去的鱼收干净。
- */
+/** 获取已确认的身份和挂载点；结构不认识时什么都不做。 */
+function sidebarFishTarget(row, index, list) {
+  if (row.matches(SUBAGENT_GRAPH_SELECTOR)) {
+    const sessionId = row.getAttribute('data-graph-node')
+    const kind = row.querySelector('[data-card-kind]')?.getAttribute('data-card-kind')
+    const bar = row.querySelector('[data-card-bar]')
+    if ((kind !== 'subagent' && kind !== 'teammate') || !index.ids.has(sessionId) || bar === null) return null
+    // 图模式已有真正驱动状态条的状态，优先使用它，避免等会话摘要追上。
+    const state = bar.getAttribute('data-running') === 'true' || bar.getAttribute('data-card-bar') === 'running'
+      ? 'running' : 'done'
+    return { sessionId, state, parent: bar, layout: 'graph' }
+  }
+  const labelElement = row.querySelector(SUBAGENT_LABEL_SELECTOR)
+  if (labelElement === null) return null
+  const modernTree = labelElement.matches('[class*="treeTitle"]')
+  if (modernTree) {
+    // TasksTree 的根代理在 level 1，工作流行声明 aria-expanded，折叠组没有
+    // 带 title 的 treeTitle。旧版专用 subagentLabel 不需要这些新版条件。
+    if (!row.hasAttribute('data-tasks-row') || row.getAttribute('aria-level') === '1' || row.hasAttribute('aria-expanded')) return null
+  }
+  const label = labelElement.textContent?.trim()
+  const sessionId = index.byLabel.get(label)
+  if (typeof sessionId !== 'string') return null
+  // TasksTree 的状态来自 subagents.live，与 list.byId.running 是独立数据源。
+  // 它仅在 running 时添加 LiveLine；该组件总会画 nodeMeta（思考中）、live
+  // 或 liveText 中的至少一种。只检查标题同层节点，避开嵌套子代理和任务按钮。
+  const treeRunning = modernTree && Array.from(labelElement.parentElement.children).some(element =>
+    /(?:^|\s)(?:\S+_)?(?:nodeMeta|live|liveText)(?:\s|$)/.test(element.getAttribute('class') ?? ''))
+  const state = modernTree ? treeRunning ? 'running' : 'done' : rowFishState(list, sessionId)
+  return { sessionId, state, parent: row, layout: 'tree' }
+}
+
+/** 观察结构 / 文本 / 状态变化，卸载时释放订阅和自己添加的节点。 */
 function installSidebarRowFish(ctx) {
-  const sessions = ctx.sessions
-  // 少任何一个前提就安静地什么都不做。这一处是整个插件唯一碰别人 DOM 的地方，
-  // 绝不能因为环境缺个 API 就把 apply() 抛出去 —— 那会连带 D 一起失效。
-  if (sessions === undefined || sessions === null) return () => {}
+  const store = ctx.sessions?.list
+  if (typeof store?.getSnapshot !== 'function') return () => {}
   if (typeof document === 'undefined' || typeof MutationObserver !== 'function') return () => {}
+  const root = document.documentElement ?? document.body
+  if (root === null || root === undefined) return () => {}
 
   let pending = false
-  let emptyScans = 0
   let disposed = false
+  const owned = new Map()
 
-  /** 扫描并给尚未挂鱼的行补上鱼。 */
+  const removeFish = (row, host) => {
+    host.remove()
+    row.removeAttribute(ROW_MARK)
+    owned.delete(row)
+  }
+
   const decorate = () => {
     pending = false
     if (disposed) return
-    const rows = document.querySelectorAll(`${SUBAGENT_ROW_SELECTOR}`)
-    if (rows.length === 0) return
-    const list = sessions.list.getSnapshot()
-    const byLabel = subagentIdsByLabel(list)
-    let touched = 0
-    for (const row of rows) {
-      const labelElement = row.querySelector(SUBAGENT_LABEL_SELECTOR)
-      if (labelElement === null) continue
-      const label = labelElement.textContent?.trim()
-      if (label === undefined || label.length === 0) continue
-      const sessionId = byLabel.get(label)
-      // 查不到就不动它 —— 宁可少挂一条鱼，也不要挂错人。
-      if (sessionId === undefined) continue
-      const state = rowFishState(list, sessionId)
-      const existing = row.querySelector('.dsf-row-fish')
-      if (existing !== null) {
-        // 行还在，但状态变了（开跑或跑完）：换掉这条鱼，让它开始 / 停止游动。
-        if (existing.getAttribute('data-dsf-state') === state) continue
-        existing.innerHTML = fishAvatarMarkup(fishIdentity(sessionId), shouldFishSwim(state))
-        existing.setAttribute('data-dsf-state', state)
-        touched += 1
+    const list = store.getSnapshot()
+    const index = subagentRowsIndex(list)
+    const seen = new Set()
+    let addedSwimmingFish = false
+    for (const row of document.querySelectorAll(SIDEBAR_FISH_SELECTOR)) {
+      const target = sidebarFishTarget(row, index, list)
+      let host = owned.get(row)
+      if (target === null) {
+        if (host !== undefined) removeFish(row, host)
         continue
       }
-      const host = document.createElement('span')
-      host.className = 'dsf-row-fish'
-      host.setAttribute('data-dsf-state', state)
-      host.innerHTML = fishAvatarMarkup(fishIdentity(sessionId), shouldFishSwim(state))
-      row.insertBefore(host, row.firstChild)
+      seen.add(row)
+      if (host === undefined) {
+        host = document.createElement('span')
+        host.className = 'dsf-row-fish'
+        host.setAttribute('aria-hidden', 'true')
+        owned.set(row, host)
+      }
+      const { sessionId, state, parent, layout } = target
+      const changed = host.getAttribute('data-dsf-id') !== sessionId || host.getAttribute('data-dsf-state') !== state
+      if (changed) {
+        host.innerHTML = fishAvatarMarkup(fishIdentity(sessionId), shouldFishSwim(state))
+        host.setAttribute('data-dsf-id', sessionId)
+        host.setAttribute('data-dsf-state', state)
+      }
+      host.setAttribute('data-dsf-layout', layout)
+      const reattached = host.parentNode !== parent
+      if (reattached) parent.insertBefore(host, parent.firstChild)
       row.setAttribute(ROW_MARK, sessionId)
-      touched += 1
+      if ((changed || reattached) && shouldFishSwim(state)) addedSwimmingFish = true
     }
-    if (touched > 0) {
-      emptyScans = 0
-      // 行是别的插件画的，它的重画会把鱼换掉；这里动完之后必须显式叫醒游动
-      // 循环 —— 缓存命中时 fishSvg 不会跑，循环停了就没人重启它。
-      // 只有真的挂了「该游的鱼」才需要叫。
-      if (rows.length > 0) ensureFishSwimming()
-      return
+    // React 可能重用、移除或更换一整行。不能让旧身份留在新行或脱离文档的节点上。
+    for (const [row, host] of owned) {
+      if (!seen.has(row)) removeFish(row, host)
     }
-    // 没有任何一行认得出来：可能是这个页面根本没打开，也可能 better-sidebar
-    // 换了结构。数够次数就停，不长期占着观察器。
-    const anyMarked = document.querySelector(`[${ROW_MARK}]`) !== null
-    if (!anyMarked && ++emptyScans > MAX_EMPTY_SCANS) observer.disconnect()
+    if (addedSwimmingFish) ensureFishSwimming()
   }
 
-  /** 合并同一轮里的多次 DOM 变动。 */
   const schedule = () => {
     if (pending || disposed) return
     pending = true
     queueMicrotask(decorate)
   }
 
-  const observer = new MutationObserver(schedule)
-  observer.observe(document.body, { childList: true, subtree: true })
-
-  // 会话列表本身的变化（跑完 / 新起子代理）也要跟着刷新状态。
-  const unsubscribe = typeof sessions.list.subscribe === 'function'
-    ? sessions.list.subscribe(schedule)
-    : () => {}
+  // 不为整页每次动画 / 文字更新扫描；只响应任务节点和包含它们的结构变化。
+  // 观察器始终待命，页面晚些打开或 better-sidebar 重挂载也能恢复。
+  const relevantNode = (node) => {
+    const element = node?.nodeType === 1 ? node : node?.parentElement
+    if (element === null || element === undefined || typeof element.closest !== 'function') return false
+    if (element.closest('.dsf-row-fish') !== null) return false
+    return owned.has(element) || element.closest(SIDEBAR_FISH_SELECTOR) !== null
+      || element.matches(SIDEBAR_FISH_SELECTOR)
+      || element.querySelector(SIDEBAR_FISH_SELECTOR) !== null
+  }
+  const observer = new MutationObserver((records) => {
+    if (records.some(record => relevantNode(record.target)
+      || (record.type === 'childList' && [...record.addedNodes, ...record.removedNodes].some(relevantNode)))) schedule()
+  })
+  observer.observe(root, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'title', 'role', 'aria-level', 'aria-expanded', 'data-tasks-row', 'data-graph-node', 'data-card-kind', 'data-card-bar', 'data-running'],
+  })
+  const unsubscribe = typeof store.subscribe === 'function' ? store.subscribe(schedule) : undefined
   schedule()
 
   return () => {
+    if (disposed) return
     disposed = true
     observer.disconnect()
-    unsubscribe()
-    for (const row of document.querySelectorAll(`[${ROW_MARK}]`)) {
-      row.querySelector('.dsf-row-fish')?.remove()
-      row.removeAttribute(ROW_MARK)
-    }
+    if (typeof unsubscribe === 'function') unsubscribe()
+    for (const [row, host] of owned) removeFish(row, host)
   }
 }

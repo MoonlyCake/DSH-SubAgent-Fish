@@ -34,25 +34,28 @@ const FISH_CSS = `
   vertical-align: middle;
   transition: opacity .25s ease, filter .25s ease;
 }
-.dsf-avatar > svg { display: block; width: 100%; height: 100%; }
+.dsf-avatar > svg {
+  display: block; width: 100%; height: 100%;
+  filter: saturate(var(--dsf-saturation, 1)) var(--dsf-shadow,);
+}
 /* 状态只靠鱼自己的明暗表达，不额外加圈、不加底色 */
 .dsf-avatar[data-state="done"] > svg { opacity: .85; }
-.dsf-avatar[data-state="failed"] > svg { filter: saturate(.18); opacity: .5; }
+.dsf-avatar[data-state="failed"] > svg { --dsf-saturation: .18; opacity: .5; }
 
 /* 对比度兜底：只有当这条鱼的底色与它落座的面板底色对比度不足 3:1 时，
    才补一层极淡的反向轮廓。哪些鱼需要由 JS 按真实对比度算出来（见 haloNeed），
    不是按「看着暗」猜的——DSH 的调色板整体偏中间调，绝大多数鱼并不需要。 */
 body[data-ds-dark-theme] .dsf-avatar[data-halo="on-dark"] > svg,
 body[data-ds-dark-theme] .dsf-avatar[data-halo="both"] > svg {
-  filter: drop-shadow(0 0 .7px rgba(255, 255, 255, .6)) drop-shadow(0 0 .7px rgba(255, 255, 255, .35));
+  --dsf-shadow: drop-shadow(0 0 .7px rgba(255, 255, 255, .6)) drop-shadow(0 0 .7px rgba(255, 255, 255, .35));
 }
 body:not([data-ds-dark-theme]) .dsf-avatar[data-halo="on-light"] > svg,
 body:not([data-ds-dark-theme]) .dsf-avatar[data-halo="both"] > svg {
-  filter: drop-shadow(0 0 .7px rgba(0, 0, 0, .45));
+  --dsf-shadow: drop-shadow(0 0 .7px rgba(0, 0, 0, .45));
 }
 /* 预览页用的强制描边开关 */
 .dsf-avatar[data-rim="on"] > svg {
-  filter: drop-shadow(0 0 .55px rgba(0, 0, 0, .8)) drop-shadow(0 0 .55px rgba(0, 0, 0, .5));
+  --dsf-shadow: drop-shadow(0 0 .55px rgba(0, 0, 0, .8)) drop-shadow(0 0 .55px rgba(0, 0, 0, .5));
 }
 .dsf-chip { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 .dsf-chip > .dsf-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -67,6 +70,7 @@ body:not([data-ds-dark-theme]) .dsf-avatar[data-halo="both"] > svg {
   margin-right: 2px;
 }
 .dsf-row-fish > svg { display: block; width: ${ROW_FISH_SIZE}px; height: ${ROW_FISH_SIZE}px; }
+.dsf-row-fish[data-dsf-layout="graph"] > svg { width: 18px; height: 18px; }
 .dsf-row-fish[data-dsf-state="done"] > svg { opacity: .8; }
 
 .dsf-page { display: flex; flex-direction: column; gap: 10px; padding: 12px 10px; font-size: 13px; color: var(--dsw-alias-label-primary); }
@@ -89,14 +93,33 @@ body:not([data-ds-dark-theme]) .dsf-avatar[data-halo="both"] > svg {
 `
 
 /** 把样式挂到 <head>，重复调用只会有一个标签。 */
+const fishCssOwners = new WeakMap()
 function installFishCss() {
-  if (typeof document === 'undefined') return
-  if (document.querySelector(`style[data-plugin-css=${JSON.stringify(FISH_CSS_TAG)}]`) !== null) return
-  const tag = document.createElement('style')
-  tag.dataset.plugin = 'dsh-subagent-fish'
-  tag.dataset.pluginCss = FISH_CSS_TAG
-  tag.textContent = FISH_CSS
-  document.head.appendChild(tag)
+  if (typeof document === 'undefined' || !document.head) return () => {}
+  const ownerDocument = document
+  let record = fishCssOwners.get(ownerDocument)
+  if (!record || record.tag.isConnected === false) {
+    let tag = ownerDocument.querySelector(`style[data-plugin-css=${JSON.stringify(FISH_CSS_TAG)}]`)
+    const created = tag === null
+    if (created) {
+      tag = ownerDocument.createElement('style')
+      tag.dataset.plugin = 'dsh-subagent-fish'
+      tag.dataset.pluginCss = FISH_CSS_TAG
+      tag.textContent = FISH_CSS
+      ownerDocument.head.appendChild(tag)
+    }
+    record = { tag, created, owners: 0 }
+    fishCssOwners.set(ownerDocument, record)
+  }
+  record.owners += 1
+  let disposed = false
+  return () => {
+    if (disposed) return
+    disposed = true
+    if (--record.owners > 0) return
+    if (record.created && typeof record.tag.remove === 'function') record.tag.remove()
+    if (fishCssOwners.get(ownerDocument) === record) fishCssOwners.delete(ownerDocument)
+  }
 }
 
 /**
@@ -155,6 +178,8 @@ function haloNeed(hex) {
  * 这也让「同一屏里重复出现的同一条鱼」共用同一段标记。
  */
 const fishAvatarCache = new Map()
+let fishAvatarSerial = 0
+const FISH_AVATAR_CACHE_LIMIT = 512
 
 function fishAvatarMarkup(identity, animated = true) {
   const key = `${identity.seed}|${identity.pattern}|${identity.patternSeed}|${identity.strength}|${animated ? 'swim' : 'still'}`
@@ -169,9 +194,12 @@ function fishAvatarMarkup(identity, animated = true) {
       // 也就永远不会动 —— 这比「动起来再冻住」省事，也不会留下半动的状态。
       still: !animated,
     })
+    if (fishAvatarCache.size >= FISH_AVATAR_CACHE_LIMIT) fishAvatarCache.delete(fishAvatarCache.keys().next().value)
     fishAvatarCache.set(key, markup)
   }
-  return markup
+  // A cached drawing may be mounted in both the tab and the sidebar. SVG IDs
+  // belong to the document, so each insertion needs its own clipping path.
+  return markup.replace(/pattern-clip-\d+/g, `pattern-clip-avatar-${++fishAvatarSerial}`)
 }
 
 /**
@@ -205,8 +233,8 @@ function ensureFishSwimming() {
       globalThis.__dsfMotionNotice = true
       console.info('[dsh-subagent-fish] 系统开启了「减少动态效果」，小鱼保持静止。')
     }
-    return
   }
+  // The engine observes changes to reduced motion even when initially paused.
   startSwimLoop()
 }
 
@@ -220,10 +248,20 @@ function ensureFishSwimming() {
 let swimHeartbeat = null
 function ensureSwimHeartbeat() {
   if (swimHeartbeat !== null || typeof setInterval !== 'function') return
+  let emptyChecks = 0
   swimHeartbeat = setInterval(() => {
-    if (typeof document === 'undefined') return
-    if (document.querySelector('svg.fish-swim[data-fish-id]') !== null) ensureFishSwimming()
+    if (typeof document !== 'undefined' && document.querySelector('svg.fish-swim[data-fish-id]') !== null) {
+      emptyChecks = 0
+      startSwimLoop()
+    } else if (++emptyChecks >= 2) stopFishSwimming()
   }, 2000)
+}
+
+/** Disposer registered with the plugin context; safe to call repeatedly. */
+function stopFishSwimming() {
+  if (swimHeartbeat !== null && typeof clearInterval === 'function') clearInterval(swimHeartbeat)
+  swimHeartbeat = null
+  if (typeof stopSwimLoop === 'function') stopSwimLoop()
 }
 
 /**

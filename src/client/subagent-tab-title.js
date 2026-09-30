@@ -6,7 +6,7 @@
 // `@deepseek-ai/dsh-client-ui-subagent`，而它自己**没有**占用这个插槽——
 // 所以标签上写什么是我们说了算，而标签正文（真正的对话内容）一点都不用碰。
 //
-// 标签的地址形如 dsh-resource://subagentchat/session/<子会话 id>，
+// 标签的地址形如 dsh-resource://subagentchat/session/<子会话 id>?parent=…&mode=…，
 // 这个 id 就是那条鱼的身份来源：同一个子代理的标签，鱼永远是同一条。
 //
 // 本文件由 tools/build-client.mjs 拼进 lib/client.js，共用同一个作用域。
@@ -20,7 +20,7 @@ const SUBAGENT_CHAT_TAB_ID = '@deepseek-ai/dsh-client-ui-subagent'
  */
 const TAB_FISH_SIZE = 20
 
-/** 子代理对话地址的前缀；后半段就是子会话 id。 */
+/** 子代理对话地址的前缀；后面的 path 段是子会话 id，query 不是鱼的身份。 */
 const SUBAGENT_CHAT_PREFIX = 'dsh-resource://subagentchat/session/'
 
 /**
@@ -30,8 +30,32 @@ const SUBAGENT_CHAT_PREFIX = 'dsh-resource://subagentchat/session/'
  */
 function subagentSessionIdOf(address) {
   if (typeof address !== 'string' || !address.startsWith(SUBAGENT_CHAT_PREFIX)) return undefined
-  const id = address.slice(SUBAGENT_CHAT_PREFIX.length)
-  return id.length === 0 ? undefined : decodeURIComponent(id)
+  const id = address.slice(SUBAGENT_CHAT_PREFIX.length).split(/[?#]/, 1)[0]
+  // 官方地址把 childSessionId 编码为单独的 path 段；%2F 是 id 内容，裸 / 是错地址。
+  if (id.length === 0 || id.includes('/')) return undefined
+  try {
+    return decodeURIComponent(id)
+  } catch {
+    // 损坏的地址也可能带 %，不能让 URIError 把整个标签栏渲染打断。
+    return undefined
+  }
+}
+
+/** 状态 hook 放在自己的组件里，避免可选 hook 出现 / 消失时改变 hook 顺序。 */
+function SubagentFishStatusTabTitle({ tab, childId, useSessionStatus }) {
+  const running = useSessionStatus((statuses) => childId !== undefined && statuses?.get?.(childId)?.running === true)
+  return renderSubagentFishTabTitle(tab, childId, running)
+}
+
+/** 用纯渲染函数共用有状态和无状态的标题。 */
+function renderSubagentFishTabTitle(tab, childId, running) {
+  if (childId === undefined) return tab.title
+  return React.createElement(
+    'span',
+    { className: 'dsf-chip' },
+    React.createElement(FishAvatar, { id: childId, size: TAB_FISH_SIZE, state: running === true ? 'running' : undefined }),
+    React.createElement('span', { className: 'dsf-label' }, tab.title),
+  )
 }
 
 /**
@@ -45,17 +69,10 @@ function SubagentFishTabTitle(props) {
   const info = useTabInfo()
   const tab = info.tab
   const childId = subagentSessionIdOf(tab.contentId)
-  // 这个 hook 必须**无条件**调用：只有「prop 在不在」是稳定的，
-  // 拿 childId 去决定调不调，会让同一个组件在两次渲染里 hook 数量不同。
-  const hasStatus = typeof useSessionStatus === 'function'
-  const running = hasStatus
-    ? useSessionStatus((statuses) => childId !== undefined && statuses?.get?.(childId)?.running === true)
-    : undefined
-  if (childId === undefined) return tab.title
-  return React.createElement(
-    'span',
-    { className: 'dsf-chip' },
-    React.createElement(FishAvatar, { id: childId, size: TAB_FISH_SIZE, state: running === true ? 'running' : undefined }),
-    React.createElement('span', { className: 'dsf-label' }, tab.title),
-  )
+  // childId 是否存在不能决定是否调用 hook；标签导航时它会改变。
+  // 可选的 hook 自己有一个组件边界，props 的可用性改变时由 React 安全挂卸载。
+  if (typeof useSessionStatus === 'function') {
+    return React.createElement(SubagentFishStatusTabTitle, { tab, childId, useSessionStatus })
+  }
+  return renderSubagentFishTabTitle(tab, childId, undefined)
 }

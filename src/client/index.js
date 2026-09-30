@@ -50,7 +50,8 @@ function registerSidebarRows(ctx) {
  * @param ctx - 客户端 cordis 上下文。
  */
 function apply(ctx) {
-  installFishCss()
+  ctx.effect(() => installFishCss(), 'subagent-fish: styles')
+  ctx.effect(() => stopFishSwimming, 'subagent-fish: animation cleanup')
   registerSubagentTabTitles(ctx)
   registerSidebarRows(ctx)
 }
